@@ -1,0 +1,8 @@
+# 补充到现有.clang-format中
+Language: Cpp
+BreakBeforeBraces: Attach
+BraceWrapping: {AfterFunction: true, AfterControlStatement: false}
+AllowShortFunctionsOnASingleLine: None
+AllowShortReturnStatementsOnASingleLine: false
+# 核心：禁止格式化块注释（/**/），保留原有排版
+FormatComments: false

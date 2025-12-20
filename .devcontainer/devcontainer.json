@@ -1,0 +1,9 @@
+{
+  "image": "xieguochao/csapp", // 指定现成的镜像
+  "workspaceFolder": "/workspace", // 容器内映射的项目路径
+  "remoteUser": "root", // 核心解决权限问题
+  "mounts": [
+    // 把本地项目根目录（${localWorkspaceFolder}）全量挂载到容器的/workspace
+    "source=${localWorkspaceFolder},target=/workspace,type=bind"
+  ]
+}

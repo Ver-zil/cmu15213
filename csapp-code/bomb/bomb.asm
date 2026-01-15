@@ -418,6 +418,7 @@ Disassembly of section .text:
   400fc9:	48 83 c4 18          	add    $0x18,%rsp
   400fcd:	c3                   	retq   
 
+; 二分，如果是区间中间值 return 0 ，左边 return 2*func4(left, mid-1)，右边 return 2*func4(mid+1, right)+1
 0000000000400fce <func4>:
   400fce:	48 83 ec 08          	sub    $0x8,%rsp
   400fd2:	89 d0                	mov    %edx,%eax

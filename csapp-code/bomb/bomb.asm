@@ -685,6 +685,8 @@ Disassembly of section .text:
   401311:	bf 08 00 00 00       	mov    $0x8,%edi
   401316:	e8 05 f9 ff ff       	callq  400c20 <exit@plt>
 
+; 如果param1是空字符串，返回0
+; 否则返回字符串长度
 000000000040131b <string_length>:
   40131b:	80 3f 00             	cmpb   $0x0,(%rdi)
   40131e:	74 12                	je     401332 <string_length+0x17>
@@ -698,6 +700,7 @@ Disassembly of section .text:
   401332:	b8 00 00 00 00       	mov    $0x0,%eax
   401337:	c3                   	retq   
 
+; 如果两个字符串不相等，直接返回1，相等返回0
 0000000000401338 <strings_not_equal>:
   401338:	41 54                	push   %r12
   40133a:	55                   	push   %rbp
@@ -709,13 +712,16 @@ Disassembly of section .text:
   40134a:	48 89 ef             	mov    %rbp,%rdi
   40134d:	e8 c9 ff ff ff       	callq  40131b <string_length>
   401352:	ba 01 00 00 00       	mov    $0x1,%edx
+  ; eax = len(param2), r12d = len(parm1)
   401357:	41 39 c4             	cmp    %eax,%r12d
   40135a:	75 3f                	jne    40139b <strings_not_equal+0x63>
   40135c:	0f b6 03             	movzbl (%rbx),%eax
   40135f:	84 c0                	test   %al,%al
+  ; 如果是空字符 return 0
   401361:	74 25                	je     401388 <strings_not_equal+0x50>
   401363:	3a 45 00             	cmp    0x0(%rbp),%al
   401366:	74 0a                	je     401372 <strings_not_equal+0x3a>
+  ; 如果第一个字符不等 return 1
   401368:	eb 25                	jmp    40138f <strings_not_equal+0x57>
   40136a:	3a 45 00             	cmp    0x0(%rbp),%al
   40136d:	0f 1f 00             	nopl   (%rax)
@@ -725,6 +731,7 @@ Disassembly of section .text:
   40137a:	0f b6 03             	movzbl (%rbx),%eax
   40137d:	84 c0                	test   %al,%al
   40137f:	75 e9                	jne    40136a <strings_not_equal+0x32>
+  ; 如果字符相等也返回0
   401381:	ba 00 00 00 00       	mov    $0x0,%edx
   401386:	eb 13                	jmp    40139b <strings_not_equal+0x63>
   401388:	ba 00 00 00 00       	mov    $0x0,%edx

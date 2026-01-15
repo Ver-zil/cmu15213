@@ -16,6 +16,6 @@ b phase_4
 b phase_5
 b phase_6
 
-
+# b read_six_numbers
 # 炸弹已经安全化，可以放心地拆弹了，开始运行程序
 r

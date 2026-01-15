@@ -808,6 +808,7 @@ Disassembly of section .text:
   401452:	bf 08 00 00 00       	mov    $0x8,%edi
   401457:	e8 c4 f7 ff ff       	callq  400c20 <exit@plt>
 
+; 从param1读取六个整数，存储到param2指向的内存中
 000000000040145c <read_six_numbers>:
   40145c:	48 83 ec 18          	sub    $0x18,%rsp
   401460:	48 89 f2             	mov    %rsi,%rdx

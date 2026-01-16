@@ -471,6 +471,7 @@ Disassembly of section .text:
   401062:	53                   	push   %rbx
   401063:	48 83 ec 20          	sub    $0x20,%rsp
   401067:	48 89 fb             	mov    %rdi,%rbx
+  ; stack canary
   40106a:	64 48 8b 04 25 28 00 	mov    %fs:0x28,%rax
   401071:	00 00 
   401073:	48 89 44 24 18       	mov    %rax,0x18(%rsp)
@@ -484,6 +485,7 @@ Disassembly of section .text:
   40108f:	88 0c 24             	mov    %cl,(%rsp)
   401092:	48 8b 14 24          	mov    (%rsp),%rdx
   401096:	83 e2 0f             	and    $0xf,%edx
+  ; 需要检查一下0x4024b0后面16个字节的值，每个字节单独看
   401099:	0f b6 92 b0 24 40 00 	movzbl 0x4024b0(%rdx),%edx
   4010a0:	88 54 04 10          	mov    %dl,0x10(%rsp,%rax,1)
   4010a4:	48 83 c0 01          	add    $0x1,%rax

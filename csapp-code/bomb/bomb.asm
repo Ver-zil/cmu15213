@@ -523,6 +523,7 @@ Disassembly of section .text:
   401106:	e8 51 03 00 00       	callq  40145c <read_six_numbers>
   40110b:	49 89 e6             	mov    %rsp,%r14
   40110e:	41 bc 00 00 00 00    	mov    $0x0,%r12d
+  ; 要求输入的数字在[1,6]并且每个数字都不一样
   401114:	4c 89 ed             	mov    %r13,%rbp
   401117:	41 8b 45 00          	mov    0x0(%r13),%eax
   40111b:	83 e8 01             	sub    $0x1,%eax
@@ -546,12 +547,14 @@ Disassembly of section .text:
   401153:	48 8d 74 24 18       	lea    0x18(%rsp),%rsi
   401158:	4c 89 f0             	mov    %r14,%rax
   40115b:	b9 07 00 00 00       	mov    $0x7,%ecx
+  ; 将m中的所有数字做0x7 - num的转化
   401160:	89 ca                	mov    %ecx,%edx
   401162:	2b 10                	sub    (%rax),%edx
   401164:	89 10                	mov    %edx,(%rax)
   401166:	48 83 c0 04          	add    $0x4,%rax
   40116a:	48 39 f0             	cmp    %rsi,%rax
   40116d:	75 f1                	jne    401160 <phase_6+0x6c>
+; 将前面的转化后的num进行映射，映射表在0x6032d0开始，并且8字节值存放在0x20(%rsp,%rsi,2)
   40116f:	be 00 00 00 00       	mov    $0x0,%esi
   401174:	eb 21                	jmp    401197 <phase_6+0xa3>
   401176:	48 8b 52 08          	mov    0x8(%rdx),%rdx
@@ -570,6 +573,7 @@ Disassembly of section .text:
   40119f:	b8 01 00 00 00       	mov    $0x1,%eax
   4011a4:	ba d0 32 60 00       	mov    $0x6032d0,%edx
   4011a9:	eb cb                	jmp    401176 <phase_6+0x82>
+; 链表值存储到0x28(%rsp)的值开始的存入到0x8(0x20(%rsp))中，根据映射值顺序连接链表，并且将最后的节点值置null
   4011ab:	48 8b 5c 24 20       	mov    0x20(%rsp),%rbx
   4011b0:	48 8d 44 24 28       	lea    0x28(%rsp),%rax
   4011b5:	48 8d 74 24 50       	lea    0x50(%rsp),%rsi
@@ -583,6 +587,7 @@ Disassembly of section .text:
   4011d0:	eb eb                	jmp    4011bd <phase_6+0xc9>
   4011d2:	48 c7 42 08 00 00 00 	movq   $0x0,0x8(%rdx)
   4011d9:	00 
+  ; 比较链表中的值是否按降序排序
   4011da:	bd 05 00 00 00       	mov    $0x5,%ebp
   4011df:	48 8b 43 08          	mov    0x8(%rbx),%rax
   4011e3:	8b 00                	mov    (%rax),%eax

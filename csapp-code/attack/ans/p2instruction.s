@@ -1,2 +1,3 @@
 mov $0x59b997fa, %rdi
-call touch2
+pushq $0x4017ec
+ret

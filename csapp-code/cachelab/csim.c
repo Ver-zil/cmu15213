@@ -263,4 +263,27 @@ void parse_addr(Cache *cache, uint64_t addr, uint64_t *tag, uint64_t *s_index) {
 
 // 将堆上分配的内存释放
 void cache_free(Cache *cache) {
+    // 1. 空指针检查（核心防御）
+    if (cache == NULL) {
+        return;
+    }
+
+    // 2. 合法性检查：groups非NULL 且 组数S>0（避免非法循环）
+    if (cache->groups != NULL && cache->S > 0) {
+        // 3. 释放每个组内的CacheLine数组（循环改用long索引，避免指针运算的类型问题）
+        for (long i = 0; i < cache->S; i++) {
+            CacheGroup *cur_group = &cache->groups[i];
+            if (cur_group->lines != NULL) {
+                free(cur_group->lines);
+                cur_group->lines = NULL; // 置NULL，避免野指针
+            }
+        }
+
+        // 4. 释放所有CacheGroup数组
+        free(cache->groups);
+        cache->groups = NULL; // 置NULL
+    }
+
+    // 5. 释放Cache结构体本身
+    free(cache);
 }

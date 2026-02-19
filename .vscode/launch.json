@@ -1,0 +1,29 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "csim-debug",
+            "type": "cppdbg",
+            "request": "launch",
+            // csim可执行文件的路径（根据你的实际目录微调，确保指向cachelab下的csim）
+            "program": "${workspaceFolder}/csapp-code/cachelab/csim",
+            // 调试参数（可根据测试用例随意替换，这是文档基础测试用例）
+            "args": [
+                "-s", "4",
+                "-E", "2",
+                "-b", "4",
+                "-t", "${workspaceFolder}/csapp-code/cachelab/traces/yi.trace"
+            ],
+            // 调试工作目录：固定指向cachelab根目录，避免找不到trace文件
+            "cwd": "${workspaceFolder}/csapp-code/cachelab",
+            "externalConsole": false,
+            // 调试前自动编译（需配合下面的tasks.json，可选）
+            // "preLaunchTask": "make csim",
+            // 跳过系统库，只调试自己的csim.c代码
+            "skipFiles": [
+                "/usr/lib/**",
+                "/usr/include/**"
+            ]
+        }
+    ]
+}

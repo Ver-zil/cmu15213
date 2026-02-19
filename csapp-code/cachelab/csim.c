@@ -70,7 +70,7 @@ int main(int argc, char *argv[]) {
 // 解析参数，并且确保没有参数错误问题
 void parse_params(int argc, char *argv[], int *s, int *E, int *b, int *v, char **file) {
     int opt;
-    while ((opt = getopt(argc, argv, "")) != -1) {
+    while ((opt = getopt(argc, argv, "s:E:b:t:v")) != -1) {
         switch (opt) {
         case 's':
             *s = atoi(optarg);
@@ -91,7 +91,8 @@ void parse_params(int argc, char *argv[], int *s, int *E, int *b, int *v, char *
             fprintf(stderr, "Invalid option: -%c\n", optopt);
             exit(1);
         default:
-            break;
+            fprintf(stderr, "Unknown option: -%c\n", opt);
+            exit(1);
         }
     }
 
@@ -111,7 +112,7 @@ void parse_params(int argc, char *argv[], int *s, int *E, int *b, int *v, char *
 
     // 5. 解析完成，打印参数（调试用，-v模式下可输出）
     if (*v) {
-        printf("Cache config: s=%d, E=%d, b=%d\n", s, E, b);
+        printf("Cache config: s=%d, E=%d, b=%d\n", *s, *E, *b);
         printf("Trace file: %s\n", *file);
     }
 }
@@ -182,7 +183,7 @@ void simulator(char *file_path, Cache *cache) {
 
 //
 int parse_opt_line(char *line, char *opt, uint64_t *addr, int *size) {
-    int params = sscanf(line, "%c %llu,%d", opt, addr, size);
+    int params = sscanf(line, " %c %lx,%d", opt, addr, size);
 
     if (params != 3) {
         fprintf(stderr, "error: parse_opt_line line:%s params=%d", line, params);
@@ -200,12 +201,11 @@ void memory_access(Cache *cache, uint64_t addr) {
 
     CacheLine *lines = cache->groups[s_index].lines;
 
-    int i = 0;
-    CacheLine *line = lines;
+    CacheLine *line = NULL;
     CacheLine *target_line = NULL;
     CacheLine *least_access_line = NULL;
     CacheLine *empty_line = NULL;
-    for (i = 0, line = lines; i < cache->E; i++, line++) {
+    for (line = lines; line < lines + cache->E; line++) {
         if (line->valid) {
             if (line->tag == tag)
                 target_line = line;
@@ -255,10 +255,10 @@ void parse_addr(Cache *cache, uint64_t addr, uint64_t *tag, uint64_t *s_index) {
 
     int s = cache->s;
     int b = cache->b;
-    uint64_t tag_mask = ((1ULL << (ADDRESS_LEN - s - b)) - 1) << (s + b);
-    uint64_t s_index_mask = ((1ULL << s) - 1) << s;
-    *tag = addr & tag_mask;
-    *s_index = addr & s_index_mask;
+    uint64_t tag_mask = ((1ULL << (ADDRESS_LEN - s - b)) - 1);
+    uint64_t s_index_mask = ((1ULL << s) - 1);
+    *tag = (addr >> (s + b)) & tag_mask;
+    *s_index = (addr >> b) & s_index_mask;
 }
 
 // 将堆上分配的内存释放

@@ -1,8 +1,14 @@
 # 补充到现有.clang-format中
-Language: Cpp
-BreakBeforeBraces: Attach
+Language: C
 BraceWrapping: {AfterFunction: true, AfterControlStatement: false}
 AllowShortFunctionsOnASingleLine: None
 AllowShortReturnStatementsOnASingleLine: false
 # 核心：禁止格式化块注释（/**/），保留原有排版
 FormatComments: false
+# 核心：匹配15213原版风格（4空格+Allman大括号+函数头换行）
+BasedOnStyle: LLVM
+IndentWidth: 4          # 缩进4个空格（核心需求）
+UseTab: Never           # 不用tab，只用空格
+BreakBeforeBraces: Attach  # Allman是大括号独占一行（15213原版风格）
+ColumnLimit: 100        # 行宽限制（避免短代码换行）
+IndentCaseLabels: false # switch的case不额外缩进（可选，15213常用）

@@ -20,6 +20,8 @@ void M_6464(int M, int N, int A[N][M], int B[M][N]);
 
 void M_6464_optimize(int M, int N, int A[N][M], int B[M][N]);
 
+void M_6464_optimal(int M, int N, int A[N][M], int B[M][N]);
+
 /*
  * transpose_submit - This is the solution transpose function that you
  *     will be graded on for Part B of the assignment. Do not change
@@ -32,7 +34,7 @@ void transpose_submit(int M, int N, int A[N][M], int B[M][N]) {
     if (M == 32 && N == 32) {
         M_3232_optimal(M, N, A, B);
     } else if (M == 64 && N == 64) {
-        M_6464_optimize(M, N, A, B);
+        M_6464_optimal(M, N, A, B);
     }
 }
 
@@ -217,6 +219,104 @@ void M_6464_optimize(int M, int N, int A[N][M], int B[M][N]) {
                     t0 = B[j + k][i + 4 + z];
                     B[j + k][i + 4 + z] = B[j + z][i + 4 + k];
                     B[j + z][i + 4 + k] = t0;
+                }
+            }
+        }
+    }
+}
+
+void M_6464_optimal(int M, int N, int A[N][M], int B[M][N]) {
+    int i, j, k, z;
+    int t0, t1, t2, t3;
+    int t4, t5, t6, t7;
+
+    for (i = 0; i < M; i += 8) {
+        for (j = 0; j < N; j += 8) {
+            // 将A的4*8的块移动到B中，并进行转置
+            // 分析：非对角对角总共8次missess
+            for (k = 0; k < 4; k++) {
+                t0 = A[i + k][j];
+                t1 = A[i + k][j + 1];
+                t2 = A[i + k][j + 2];
+                t3 = A[i + k][j + 3];
+                t4 = A[i + k][j + 4];
+                t5 = A[i + k][j + 5];
+                t6 = A[i + k][j + 6];
+                t7 = A[i + k][j + 7];
+
+                B[j + k][i] = t0;
+                B[j + k][i + 1] = t1;
+                B[j + k][i + 2] = t2;
+                B[j + k][i + 3] = t3;
+                B[j + k][i + 4] = t4;
+                B[j + k][i + 5] = t5;
+                B[j + k][i + 6] = t6;
+                B[j + k][i + 7] = t7;
+            }
+
+            for (k = 0; k < 4; k++) {
+                for (z = 0; z < k; z++) {
+                    t0 = B[j + k][i + z];
+                    B[j + k][i + z] = B[j + z][i + k];
+                    B[j + z][i + k] = t0;
+                }
+            }
+
+            for (k = 0; k < 4; k++) {
+                for (z = 0; z < k; z++) {
+                    t0 = B[j + k][i + 4 + z];
+                    B[j + k][i + 4 + z] = B[j + z][i + 4 + k];
+                    B[j + z][i + 4 + k] = t0;
+                }
+            }
+
+            // 将A的第二个4*8的块移动到B中，并进行转置（过程中将刚才在B转置的块移动到B自身对应的位置）
+            // 分析：非对角8次missess，对角18次misses
+            for (k = 0; k < 4; k++) {
+                // 分析：非对角每次都命中，对角第一次命中，后面每次产生1个misses
+                t0 = B[j + k][i + 4];
+                t1 = B[j + k][i + 5];
+                t2 = B[j + k][i + 6];
+                t3 = B[j + k][i + 7];
+
+                // 分析：非对角第一次产生4次misses，后面每次命中，对角第一次产生4次misses，后面每次产生1个misses
+                t4 = A[i + 4][j + k];
+                t5 = A[i + 5][j + k];
+                t6 = A[i + 6][j + k];
+                t7 = A[i + 7][j + k];
+
+                // 分析：非对角每次都命中，对角每次产生1个misses
+                B[j + k][i + 4] = t4;
+                B[j + k][i + 5] = t5;
+                B[j + k][i + 6] = t6;
+                B[j + k][i + 7] = t7;
+
+                // 分析：对角非对角每次产生1次misses
+                B[j + 4 + k][i] = t0;
+                B[j + 4 + k][i + 1] = t1;
+                B[j + 4 + k][i + 2] = t2;
+                B[j + 4 + k][i + 3] = t3;
+            }
+
+            // A中右下角的4*4块移动到B中，并进行转置
+            // 分析：非对角每次都命中，对角总共产生8次misses
+            for (k = 0; k < 4; k++) {
+                t0 = A[i + 4 + k][j + 4];
+                t1 = A[i + 4 + k][j + 5];
+                t2 = A[i + 4 + k][j + 6];
+                t3 = A[i + 4 + k][j + 7];
+
+                B[j + 4 + k][i + 4] = t0;
+                B[j + 4 + k][i + 5] = t1;
+                B[j + 4 + k][i + 6] = t2;
+                B[j + 4 + k][i + 7] = t3;
+            }
+
+            for (k = 0; k < 4; k++) {
+                for (z = 0; z < k; z++) {
+                    t0 = B[j + 4 + k][i + 4 + z];
+                    B[j + 4 + k][i + 4 + z] = B[j + 4 + z][i + 4 + k];
+                    B[j + 4 + z][i + 4 + k] = t0;
                 }
             }
         }

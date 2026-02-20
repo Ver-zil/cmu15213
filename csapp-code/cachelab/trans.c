@@ -14,7 +14,11 @@ int is_transpose(int M, int N, int A[N][M], int B[M][N]);
 
 void M_3232(int M, int N, int A[N][M], int B[M][N]);
 
+void M_3232_optimal(int M, int N, int A[N][M], int B[M][N]);
+
 void M_6464(int M, int N, int A[N][M], int B[M][N]);
+
+void M_6464_optimize(int M, int N, int A[N][M], int B[M][N]);
 
 /*
  * transpose_submit - This is the solution transpose function that you
@@ -26,9 +30,9 @@ void M_6464(int M, int N, int A[N][M], int B[M][N]);
 char transpose_submit_desc[] = "Transpose submission";
 void transpose_submit(int M, int N, int A[N][M], int B[M][N]) {
     if (M == 32 && N == 32) {
-        M_3232(M, N, A, B);
+        M_3232_optimal(M, N, A, B);
     } else if (M == 64 && N == 64) {
-        M_6464(M, N, A, B);
+        M_6464_optimize(M, N, A, B);
     }
 }
 
@@ -61,6 +65,45 @@ void M_3232(int M, int N, int A[N][M], int B[M][N]) {
     }
 }
 
+void M_3232_optimal(int M, int N, int A[N][M], int B[M][N]) {
+    int i, j, k, z;
+    int t0, t1, t2, t3, t4, t5, t6, t7;
+
+    for (i = 0; i < M; i += 8) {
+        for (j = 0; j < N; j += 8) {
+            // i,j块平移到j,i块
+            for (k = 0; k < 8; k++) {
+                t0 = A[i + k][j];
+                t1 = A[i + k][j + 1];
+                t2 = A[i + k][j + 2];
+                t3 = A[i + k][j + 3];
+                t4 = A[i + k][j + 4];
+                t5 = A[i + k][j + 5];
+                t6 = A[i + k][j + 6];
+                t7 = A[i + k][j + 7];
+
+                B[j + k][i] = t0;
+                B[j + k][i + 1] = t1;
+                B[j + k][i + 2] = t2;
+                B[j + k][i + 3] = t3;
+                B[j + k][i + 4] = t4;
+                B[j + k][i + 5] = t5;
+                B[j + k][i + 6] = t6;
+                B[j + k][i + 7] = t7;
+            }
+
+            // 将j,i块进行一次转置
+            for (k = 0; k < 8; k++) {
+                for (z = 0; z < k; z++) {
+                    t0 = B[j + k][i + z];
+                    B[j + k][i + z] = B[j + z][i + k];
+                    B[j + z][i + k] = t0;
+                }
+            }
+        }
+    }
+}
+
 void M_6464(int M, int N, int A[N][M], int B[M][N]) {
     int i, j, k;
     int t0, t1, t2, t3;
@@ -77,6 +120,104 @@ void M_6464(int M, int N, int A[N][M], int B[M][N]) {
                 B[j + 1][i + k] = t1;
                 B[j + 2][i + k] = t2;
                 B[j + 3][i + k] = t3;
+            }
+        }
+    }
+}
+
+void M_6464_optimize(int M, int N, int A[N][M], int B[M][N]) {
+    int i, j, k, z;
+    int t0, t1, t2, t3;
+    // int t4, t5, t6, t7;
+
+    for (i = 0; i < M; i += 8) {
+        for (j = 0; j < N; j += 8) {
+            // 先将A8*8中左上的4*4的块移动打目标位置d
+            for (k = 0; k < 4; k++) {
+                t0 = A[i + k][j];
+                t1 = A[i + k][j + 1];
+                t2 = A[i + k][j + 2];
+                t3 = A[i + k][j + 3];
+
+                B[j + k][i] = t0;
+                B[j + k][i + 1] = t1;
+                B[j + k][i + 2] = t2;
+                B[j + k][i + 3] = t3;
+            }
+
+            // 对目标块进行转置
+            for (k = 0; k < 4; k++) {
+                for (z = 0; z < k; z++) {
+                    t0 = B[j + k][i + z];
+                    B[j + k][i + z] = B[j + z][i + k];
+                    B[j + z][i + k] = t0;
+                }
+            }
+
+            // 将A8*8中右上的4*4的块移动到目标位置
+            for (k = 0; k < 4; k++) {
+                t0 = A[i + k][j + 4];
+                t1 = A[i + k][j + 5];
+                t2 = A[i + k][j + 6];
+                t3 = A[i + k][j + 7];
+
+                B[j + k + 4][i] = t0;
+                B[j + k + 4][i + 1] = t1;
+                B[j + k + 4][i + 2] = t2;
+                B[j + k + 4][i + 3] = t3;
+            }
+
+            // 将A右上角的4*4移动后的块进行转置
+            for (k = 0; k < 4; k++) {
+                for (z = 0; z < k; z++) {
+                    t0 = B[j + 4 + k][i + z];
+                    B[j + 4 + k][i + z] = B[j + 4 + z][i + k];
+                    B[j + 4 + z][i + k] = t0;
+                }
+            }
+
+            // 将A8*8中右下的4*4的块移动到目标位置
+            for (k = 0; k < 4; k++) {
+                t0 = A[i + 4 + k][j + 4];
+                t1 = A[i + 4 + k][j + 5];
+                t2 = A[i + 4 + k][j + 6];
+                t3 = A[i + 4 + k][j + 7];
+
+                B[j + 4 + k][i + 4] = t0;
+                B[j + 4 + k][i + 5] = t1;
+                B[j + 4 + k][i + 6] = t2;
+                B[j + 4 + k][i + 7] = t3;
+            }
+
+            // 将A右下角的4*4移动后的块进行转置
+            for (k = 0; k < 4; k++) {
+                for (z = 0; z < k; z++) {
+                    t0 = B[j + 4 + k][i + 4 + z];
+                    B[j + 4 + k][i + 4 + z] = B[j + 4 + z][i + 4 + k];
+                    B[j + 4 + z][i + 4 + k] = t0;
+                }
+            }
+
+            // 将A8*8中左下的4*4的块移动到目标位置
+            for (k = 0; k < 4; k++) {
+                t0 = A[i + 4 + k][j];
+                t1 = A[i + 4 + k][j + 1];
+                t2 = A[i + 4 + k][j + 2];
+                t3 = A[i + 4 + k][j + 3];
+
+                B[j + k][i + 4] = t0;
+                B[j + k][i + 5] = t1;
+                B[j + k][i + 6] = t2;
+                B[j + k][i + 7] = t3;
+            }
+
+            // 将A左下角的4*4移动后的块进行转置
+            for (k = 0; k < 4; k++) {
+                for (z = 0; z < k; z++) {
+                    t0 = B[j + k][i + 4 + z];
+                    B[j + k][i + 4 + z] = B[j + z][i + 4 + k];
+                    B[j + z][i + 4 + k] = t0;
+                }
             }
         }
     }

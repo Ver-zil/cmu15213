@@ -271,14 +271,8 @@ void M_6464_optimal(int M, int N, int A[N][M], int B[M][N]) {
             }
 
             // 将A的第二个4*8的块移动到B中，并进行转置（过程中将刚才在B转置的块移动到B自身对应的位置）
-            // 分析：非对角8次missess，对角18次misses
+            // 分析：非对角8次missess，对角15次misses
             for (k = 0; k < 4; k++) {
-                // 分析：非对角每次都命中，对角第一次命中，后面每次产生1个misses
-                t0 = B[j + k][i + 4];
-                t1 = B[j + k][i + 5];
-                t2 = B[j + k][i + 6];
-                t3 = B[j + k][i + 7];
-
                 // 分析：非对角第一次产生4次misses，后面每次命中，对角第一次产生4次misses，后面每次产生1个misses
                 t4 = A[i + 4][j + k];
                 t5 = A[i + 5][j + k];
@@ -286,6 +280,12 @@ void M_6464_optimal(int M, int N, int A[N][M], int B[M][N]) {
                 t7 = A[i + 7][j + k];
 
                 // 分析：非对角每次都命中，对角每次产生1个misses
+                t0 = B[j + k][i + 4];
+                t1 = B[j + k][i + 5];
+                t2 = B[j + k][i + 6];
+                t3 = B[j + k][i + 7];
+
+                // 分析：对角非对角每次都命中
                 B[j + k][i + 4] = t4;
                 B[j + k][i + 5] = t5;
                 B[j + k][i + 6] = t6;
@@ -299,7 +299,7 @@ void M_6464_optimal(int M, int N, int A[N][M], int B[M][N]) {
             }
 
             // A中右下角的4*4块移动到B中，并进行转置
-            // 分析：非对角每次都命中，对角总共产生8次misses
+            // 分析：非对角每次都命中，对角总共产生5次misses
             for (k = 0; k < 4; k++) {
                 t0 = A[i + 4 + k][j + 4];
                 t1 = A[i + 4 + k][j + 5];

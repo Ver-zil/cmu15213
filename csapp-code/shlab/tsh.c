@@ -163,10 +163,51 @@ int main(int argc, char **argv) {
  */
 void eval(char *cmdline) {
     char *argv[MAXARGS];
-    parseline(cmdline, argv);
+    static char cmdline_backup[MAXLINE];
+    strcpy(cmdline_backup, cmdline);
+
+    int bg = parseline(cmdline, argv);
     if (builtin_cmd(argv))
         return;
 
+    sigset_t mask, prev_mask;
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGCHLD);
+    sigprocmask(SIG_BLOCK, &mask, &prev_mask);
+    // 开fork前，可能需要将所有signal阻塞
+    pid_t pid = fork();
+    if (pid == 0) {
+        // 子进程处理程序
+
+        setpgid(0, 0);
+        // 子进程恢复默认行为
+        sigprocmask(SIG_SETMASK, &prev_mask, NULL);
+        Signal(SIGINT, SIG_DFL);  /* ctrl-c */
+        Signal(SIGTSTP, SIG_DFL); /* ctrl-z */
+        if (execve(argv[0], argv, environ) < 0) {
+            printf("eval execve %s cmd not found \n", argv[0]);
+            exit(0);
+        }
+    }
+
+    addjob(jobs, pid, bg ? BG : FG, cmdline_backup);
+    setpgid(pid, 0);
+    sigprocmask(SIG_SETMASK, &prev_mask, NULL);
+    if (!bg) {
+        int status;
+        pid_t ret_pid;
+        while ((ret_pid = waitpid(pid, &status, 0)) < 0) {
+            if (errno == EINTR) {
+                printf("eval errno==EINTR pid:%d", ret_pid);
+            } else if (errno == ECHILD) {
+                printf("eval errno==ECHILD pid:%d", ret_pid);
+            } else {
+                perror("eval waitpid error");
+            }
+        }
+
+        deletejob(jobs, ret_pid);
+    }
     return;
 }
 
@@ -232,8 +273,9 @@ int builtin_cmd(char **argv) {
     if (!strcmp(argv[0], "quit")) {
         printf("builtin quit");
         exit(0);
-    } else if (strcmp(argv[0], "jobs")) {
+    } else if (!strcmp(argv[0], "jobs")) {
         listjobs(jobs);
+        return 1;
     } else if (!strcmp(argv[0], "bg")) {
 
     } else if (!strcmp(argv[0], "fg")) {
@@ -267,6 +309,20 @@ void waitfg(pid_t pid) {
  *     currently running children to terminate.
  */
 void sigchld_handler(int sig) {
+    // 非阻塞式回收子进程
+    int status;
+    pid_t ret_pid;
+
+    while ((ret_pid = waitpid(-1, &status, WNOHANG | WUNTRACED)) > 0) {
+        if (WIFEXITED(status)) {
+            // 如果子进程终止，进行回收
+            deletejob(jobs, ret_pid);
+        } else if (WIFSTOPPED(status)) {
+            // 子进程stop，更新状态
+            struct job_t *t = getjobpid(jobs, ret_pid);
+            t->state = ST;
+        }
+    }
     return;
 }
 

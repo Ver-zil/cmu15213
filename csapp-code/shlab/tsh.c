@@ -63,6 +63,9 @@ void sigchld_handler(int sig);
 void sigtstp_handler(int sig);
 void sigint_handler(int sig);
 
+ssize_t sig_handler_info_writer(pid_t pid, int sig, char *state_key);
+int itoa_safe(int num, char *buf);
+
 /* Here are helper routines that we've provided for you */
 int parseline(const char *cmdline, char **argv);
 void sigquit_handler(int sig);
@@ -173,6 +176,8 @@ void eval(char *cmdline) {
     sigset_t mask, prev_mask;
     sigemptyset(&mask);
     sigaddset(&mask, SIGCHLD);
+    sigaddset(&mask, SIGINT);
+    sigaddset(&mask, SIGTSTP);
     sigprocmask(SIG_BLOCK, &mask, &prev_mask);
     // 开fork前，可能需要将所有signal阻塞
     pid_t pid = fork();
@@ -190,9 +195,14 @@ void eval(char *cmdline) {
         }
     }
 
+    // 默认addjob是成功的
     addjob(jobs, pid, bg ? BG : FG, cmdline_backup);
-    setpgid(pid, 0);
+    if (bg) {
+        struct job_t *job = getjobpid(jobs, pid);
+        printf("[%d] (%d) %s", job->jid, job->pid, job->cmdline);
+    }
     sigprocmask(SIG_SETMASK, &prev_mask, NULL);
+
     if (!bg) {
         waitfg(pid);
     }
@@ -285,9 +295,21 @@ void waitfg(pid_t pid) {
     int status;
     pid_t ret_pid;
     while (1) {
-        ret_pid = waitpid(pid, &status, 0);
+        ret_pid = waitpid(pid, &status, WUNTRACED);
         if (ret_pid > 0) {
-            deletejob(jobs, ret_pid);
+            if (WIFEXITED(status) || WIFSIGNALED(status)) {
+                // 如果子进程终止，进行回收
+                deletejob(jobs, ret_pid);
+
+                if (WIFSIGNALED(status))
+                    sig_handler_info_writer(ret_pid, WTERMSIG(status), "terminated");
+            } else if (WIFSTOPPED(status)) {
+                // 子进程stop，更新状态
+                struct job_t *t = getjobpid(jobs, ret_pid);
+                t->state = ST;
+                sig_handler_info_writer(ret_pid, WSTOPSIG(status), "stopped");
+            }
+
             break;
         } else {
             if (errno == EINTR) {
@@ -323,10 +345,14 @@ void sigchld_handler(int sig) {
         if (WIFEXITED(status) || WIFSIGNALED(status)) {
             // 如果子进程终止，进行回收
             deletejob(jobs, ret_pid);
+
+            if (WIFSIGNALED(status))
+                sig_handler_info_writer(ret_pid, WTERMSIG(status), "terminated");
         } else if (WIFSTOPPED(status)) {
             // 子进程stop，更新状态
             struct job_t *t = getjobpid(jobs, ret_pid);
             t->state = ST;
+            sig_handler_info_writer(ret_pid, WSTOPSIG(status), "stopped");
         }
     }
     return;
@@ -352,7 +378,76 @@ void sigint_handler(int sig) {
  *     foreground job by sending it a SIGTSTP.
  */
 void sigtstp_handler(int sig) {
+    pid_t fgid = fgpid(jobs);
+    if (fgid != 0) {
+        kill(-fgid, sig);
+    }
     return;
+}
+
+ssize_t sig_handler_info_writer(pid_t pid, int sig, char *state_key) {
+    int pos = 0;
+    char buf[MAXLINE];
+    struct job_t *job = getjobpid(jobs, pid);
+    // 写"Job ["
+    memcpy(buf + pos, "Job [", 5);
+    pos += 5;
+    // 写jid
+    pos += itoa_safe(job->jid, buf + pos);
+    // 写"] ("
+    memcpy(buf + pos, "] (", 3);
+    pos += 3;
+    // 写pid
+    pos += itoa_safe(pid, buf + pos);
+
+    // 写") stopped by signal "
+    memcpy(buf + pos, ") ", 2);
+    pos += 2;
+
+    // 拼接状态关键词 + " by signal "
+    // 比如："stopped" + " by signal " → "stopped by signal "
+    int key_len = strlen(state_key);
+    memcpy(buf + pos, state_key, key_len);
+    pos += key_len;
+    memcpy(buf + pos, " by signal ", 11);
+    pos += 11;
+
+    // 写sig_num（SIGTSTP=20）
+    pos += itoa_safe(sig, buf + pos);
+    // 写换行
+    memcpy(buf + pos, "\n", 1);
+    pos += 1;
+
+    // 3. 直接调用write输出（异步信号安全）
+    return write(STDOUT_FILENO, buf, pos);
+}
+
+// 异步信号安全的数字转字符串（仅处理正数，满足ShellLab需求）
+// 参数：num=要转换的数字，buf=输出缓冲区（至少16字节），返回值=字符串长度
+int itoa_safe(int num, char *buf) {
+    char tmp[16]; // 临时缓冲区，栈上分配，安全
+    int i = 0, len = 0;
+
+    // 处理0的特殊情况
+    if (num == 0) {
+        buf[0] = '0';
+        buf[1] = '\0';
+        return 1;
+    }
+
+    // 数字转字符（逆序）
+    while (num > 0) {
+        tmp[i++] = '0' + (num % 10);
+        num /= 10;
+    }
+    len = i;
+
+    // 逆序拷贝到目标缓冲区
+    for (int j = 0; j < len; j++) {
+        buf[j] = tmp[len - 1 - j];
+    }
+    buf[len] = '\0';
+    return len;
 }
 
 /*********************

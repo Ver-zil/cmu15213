@@ -194,19 +194,7 @@ void eval(char *cmdline) {
     setpgid(pid, 0);
     sigprocmask(SIG_SETMASK, &prev_mask, NULL);
     if (!bg) {
-        int status;
-        pid_t ret_pid;
-        while ((ret_pid = waitpid(pid, &status, 0)) < 0) {
-            if (errno == EINTR) {
-                printf("eval errno==EINTR pid:%d", ret_pid);
-            } else if (errno == ECHILD) {
-                printf("eval errno==ECHILD pid:%d", ret_pid);
-            } else {
-                perror("eval waitpid error");
-            }
-        }
-
-        deletejob(jobs, ret_pid);
+        waitfg(pid);
     }
     return;
 }
@@ -294,6 +282,24 @@ void do_bgfg(char **argv) {
  * waitfg - Block until process pid is no longer the foreground process
  */
 void waitfg(pid_t pid) {
+    int status;
+    pid_t ret_pid;
+    while (1) {
+        ret_pid = waitpid(pid, &status, 0);
+        if (ret_pid > 0) {
+            deletejob(jobs, ret_pid);
+            break;
+        } else {
+            if (errno == EINTR) {
+                printf("eval errno==EINTR pid:%d", ret_pid);
+            } else if (errno == ECHILD) {
+                printf("eval errno==ECHILD pid:%d", ret_pid);
+                break;
+            } else {
+                perror("eval waitpid error");
+            }
+        }
+    }
     return;
 }
 
@@ -314,7 +320,7 @@ void sigchld_handler(int sig) {
     pid_t ret_pid;
 
     while ((ret_pid = waitpid(-1, &status, WNOHANG | WUNTRACED)) > 0) {
-        if (WIFEXITED(status)) {
+        if (WIFEXITED(status) || WIFSIGNALED(status)) {
             // 如果子进程终止，进行回收
             deletejob(jobs, ret_pid);
         } else if (WIFSTOPPED(status)) {
@@ -332,6 +338,11 @@ void sigchld_handler(int sig) {
  *    to the foreground job.
  */
 void sigint_handler(int sig) {
+    // shell收到ctrl+c的信号，广播到前台进程组中
+    pid_t fgid = fgpid(jobs);
+    if (fgid != 0) {
+        kill(-fgid, sig);
+    }
     return;
 }
 

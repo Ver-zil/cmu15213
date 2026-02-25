@@ -58,6 +58,7 @@ void eval(char *cmdline);
 int builtin_cmd(char **argv);
 void do_bgfg(char **argv);
 void waitfg(pid_t pid);
+int extract_jid(char *arg);
 
 void sigchld_handler(int sig);
 void sigtstp_handler(int sig);
@@ -175,6 +176,7 @@ void eval(char *cmdline) {
 
     sigset_t mask, prev_mask;
     sigemptyset(&mask);
+    // 防止fork后，子进程执行太快，导致没有add前就执行delete了
     sigaddset(&mask, SIGCHLD);
     sigaddset(&mask, SIGINT);
     sigaddset(&mask, SIGTSTP);
@@ -274,9 +276,9 @@ int builtin_cmd(char **argv) {
     } else if (!strcmp(argv[0], "jobs")) {
         listjobs(jobs);
         return 1;
-    } else if (!strcmp(argv[0], "bg")) {
-
-    } else if (!strcmp(argv[0], "fg")) {
+    } else if (!strcmp(argv[0], "bg") || !strcmp(argv[0], "fg")) {
+        do_bgfg(argv);
+        return 1;
     }
     return 0; /* not a builtin command */
 }
@@ -285,7 +287,41 @@ int builtin_cmd(char **argv) {
  * do_bgfg - Execute the builtin bg and fg commands
  */
 void do_bgfg(char **argv) {
+    // 校验后面的参数
+    int jid = extract_jid(argv[1]);
+    if (jid <= 0)
+        return;
+
+    struct job_t *job = getjobjid(jobs, jid);
+    if (!strcmp(argv[0], "bg")) {
+        job->state = BG;
+        kill(job->pid, SIGCONT);
+        printf("[%d] (%d) %s", job->jid, job->pid, job->cmdline);
+    } else {
+        job->state = FG;
+        kill(job->pid, SIGCONT);
+        waitfg(job->pid);
+    }
     return;
+}
+
+int extract_jid(char *arg) {
+    if (arg == NULL || arg[0] != '%' || strlen(arg) < 2)
+        return -1;
+
+    char *num_str = arg + 1;
+
+    // 如果参数里带有字母，直接判断为无效参数
+    int i = 0;
+    for (i = 0; num_str[i] != '\0'; i++) {
+        if (!isdigit(num_str[i]))
+            return -1;
+    }
+
+    int jid = atoi(num_str);
+    if (jid <= 0)
+        return -1;
+    return jid;
 }
 
 /*

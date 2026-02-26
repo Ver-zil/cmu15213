@@ -58,7 +58,8 @@ void eval(char *cmdline);
 int builtin_cmd(char **argv);
 void do_bgfg(char **argv);
 void waitfg(pid_t pid);
-int extract_jid(char *arg);
+int isJid(char *argv1);
+int isPid(char *argv1);
 
 void sigchld_handler(int sig);
 void sigtstp_handler(int sig);
@@ -201,7 +202,7 @@ void eval(char *cmdline) {
         Signal(SIGTSTP, SIG_DFL); /* ctrl-z */
         Signal(SIGCHLD, SIG_DFL); /* ctrl-z */
         if (execve(argv[0], argv, environ) < 0) {
-            printf("eval execve %s cmd not found \n", argv[0]);
+            printf("%s: Command not found\n", argv[0]);
             exit(0);
         }
     }
@@ -281,7 +282,6 @@ int parseline(const char *cmdline, char **argv) {
  */
 int builtin_cmd(char **argv) {
     if (!strcmp(argv[0], "quit")) {
-        printf("builtin quit");
         exit(0);
     } else if (!strcmp(argv[0], "jobs")) {
         listjobs(jobs);
@@ -298,11 +298,33 @@ int builtin_cmd(char **argv) {
  */
 void do_bgfg(char **argv) {
     // 校验后面的参数
-    int jid = extract_jid(argv[1]);
-    if (jid <= 0)
+    if (argv[1] == NULL) {
+        printf("%s command requires PID or %%jobid argument\n", argv[0]);
         return;
+    }
 
-    struct job_t *job = getjobjid(jobs, jid);
+    if (!isJid(argv[1]) && !isPid(argv[1])) {
+        printf("%s: argument must be a PID or %%jobid\n", argv[0]);
+        return;
+    }
+
+    struct job_t *job = NULL;
+    if (isJid(argv[1])) {
+        int jid = atoi(argv[1] + 1);
+        job = getjobjid(jobs, jid);
+        if (job == NULL) {
+            printf("%s: No such job\n", argv[1]);
+            return;
+        }
+    } else {
+        int pid = atoi(argv[1]);
+        job = getjobpid(jobs, pid);
+        if (job == NULL) {
+            printf("(%s): No such process\n", argv[1]);
+            return;
+        }
+    }
+
     if (!strcmp(argv[0], "bg")) {
         job->state = BG;
         kill(-job->pid, SIGCONT);
@@ -315,23 +337,36 @@ void do_bgfg(char **argv) {
     return;
 }
 
-int extract_jid(char *arg) {
-    if (arg == NULL || arg[0] != '%' || strlen(arg) < 2)
-        return -1;
+int isJid(char *argv1) {
+    if (argv1 == NULL || argv1[0] != '%' || strlen(argv1) < 2)
+        return 0;
 
-    char *num_str = arg + 1;
+    char *num_str = argv1 + 1;
 
     // 如果参数里带有字母，直接判断为无效参数
     int i = 0;
     for (i = 0; num_str[i] != '\0'; i++) {
         if (!isdigit(num_str[i]))
-            return -1;
+            return 0;
     }
 
-    int jid = atoi(num_str);
-    if (jid <= 0)
-        return -1;
-    return jid;
+    return 1;
+}
+
+int isPid(char *argv1) {
+    if (argv1 == NULL)
+        return 0;
+
+    char *num_str = argv1;
+
+    // 如果参数里带有字母，直接判断为无效参数
+    int i = 0;
+    for (i = 0; num_str[i] != '\0'; i++) {
+        if (!isdigit(num_str[i]))
+            return 0;
+    }
+
+    return 1;
 }
 
 /*

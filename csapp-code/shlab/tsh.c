@@ -66,6 +66,8 @@ void sigint_handler(int sig);
 
 ssize_t sig_handler_info_writer(pid_t pid, int sig, char *state_key);
 int itoa_safe(int num, char *buf);
+ssize_t sio_puts(char *s);
+ssize_t sio_putl(int num);
 
 /* Here are helper routines that we've provided for you */
 int parseline(const char *cmdline, char **argv);
@@ -138,6 +140,8 @@ int main(int argc, char **argv) {
             printf("%s", prompt);
             fflush(stdout);
         }
+        // printf("main while1 \n");
+        // fflush(stdout);
         if ((fgets(cmdline, MAXLINE, stdin) == NULL) && ferror(stdin))
             app_error("fgets error");
         if (feof(stdin)) { /* End of file (ctrl-d) */
@@ -145,10 +149,14 @@ int main(int argc, char **argv) {
             exit(0);
         }
 
+        // printf("main while2 cmdline:%s \n", cmdline);
+        // fflush(stdout);
         /* Evaluate the command line */
         eval(cmdline);
         fflush(stdout);
         fflush(stdout);
+        // printf("main while3 \n");
+        // fflush(stdout);
     }
 
     exit(0); /* control never reaches here */
@@ -191,6 +199,7 @@ void eval(char *cmdline) {
         sigprocmask(SIG_SETMASK, &prev_mask, NULL);
         Signal(SIGINT, SIG_DFL);  /* ctrl-c */
         Signal(SIGTSTP, SIG_DFL); /* ctrl-z */
+        Signal(SIGCHLD, SIG_DFL); /* ctrl-z */
         if (execve(argv[0], argv, environ) < 0) {
             printf("eval execve %s cmd not found \n", argv[0]);
             exit(0);
@@ -206,6 +215,7 @@ void eval(char *cmdline) {
     sigprocmask(SIG_SETMASK, &prev_mask, NULL);
 
     if (!bg) {
+        // printf("eval !bg sucess cmd:%s argv[0]:%s \n", cmdline_backup, argv[0]);
         waitfg(pid);
     }
     return;
@@ -295,11 +305,11 @@ void do_bgfg(char **argv) {
     struct job_t *job = getjobjid(jobs, jid);
     if (!strcmp(argv[0], "bg")) {
         job->state = BG;
-        kill(job->pid, SIGCONT);
+        kill(-job->pid, SIGCONT);
         printf("[%d] (%d) %s", job->jid, job->pid, job->cmdline);
     } else {
         job->state = FG;
-        kill(job->pid, SIGCONT);
+        kill(-job->pid, SIGCONT);
         waitfg(job->pid);
     }
     return;
@@ -332,18 +342,21 @@ void waitfg(pid_t pid) {
     pid_t ret_pid;
     while (1) {
         ret_pid = waitpid(pid, &status, WUNTRACED);
+        // printf("waitfg ret_pid:%d, pid:%d \n", ret_pid, pid);
         if (ret_pid > 0) {
+            struct job_t *job = getjobpid(jobs, ret_pid);
             if (WIFEXITED(status) || WIFSIGNALED(status)) {
+                // delete 前调用
+                if (WIFSIGNALED(status))
+                    printf("Job [%d] (%d) terminated by signal %d\n", job->jid, job->pid,
+                           WTERMSIG(status));
                 // 如果子进程终止，进行回收
                 deletejob(jobs, ret_pid);
-
-                if (WIFSIGNALED(status))
-                    sig_handler_info_writer(ret_pid, WTERMSIG(status), "terminated");
             } else if (WIFSTOPPED(status)) {
                 // 子进程stop，更新状态
-                struct job_t *t = getjobpid(jobs, ret_pid);
-                t->state = ST;
-                sig_handler_info_writer(ret_pid, WSTOPSIG(status), "stopped");
+                job->state = ST;
+                printf("Job [%d] (%d) stopped by signal %d\n", job->jid, job->pid,
+                       WSTOPSIG(status));
             }
 
             break;
@@ -378,12 +391,15 @@ void sigchld_handler(int sig) {
     pid_t ret_pid;
 
     while ((ret_pid = waitpid(-1, &status, WNOHANG | WUNTRACED)) > 0) {
+        sio_puts("sigchld_handler");
+        sio_puts("  ret_pid:");
+        sio_putl(ret_pid);
         if (WIFEXITED(status) || WIFSIGNALED(status)) {
-            // 如果子进程终止，进行回收
-            deletejob(jobs, ret_pid);
-
+            // delete 前调用
             if (WIFSIGNALED(status))
                 sig_handler_info_writer(ret_pid, WTERMSIG(status), "terminated");
+            // 如果子进程终止，进行回收
+            deletejob(jobs, ret_pid);
         } else if (WIFSTOPPED(status)) {
             // 子进程stop，更新状态
             struct job_t *t = getjobpid(jobs, ret_pid);
@@ -402,6 +418,10 @@ void sigchld_handler(int sig) {
 void sigint_handler(int sig) {
     // shell收到ctrl+c的信号，广播到前台进程组中
     pid_t fgid = fgpid(jobs);
+    // sio_puts("sigint_handler ");
+    // sio_puts("  fdgid:");
+    // sio_putl(fgid);
+    // sio_puts("\n");
     if (fgid != 0) {
         kill(-fgid, sig);
     }
@@ -415,6 +435,7 @@ void sigint_handler(int sig) {
  */
 void sigtstp_handler(int sig) {
     pid_t fgid = fgpid(jobs);
+    // sio_puts("sigtstp_handler \n");
     if (fgid != 0) {
         kill(-fgid, sig);
     }
@@ -425,6 +446,10 @@ ssize_t sig_handler_info_writer(pid_t pid, int sig, char *state_key) {
     int pos = 0;
     char buf[MAXLINE];
     struct job_t *job = getjobpid(jobs, pid);
+    if (job == NULL || state_key == NULL || strlen(state_key) == 0) {
+        const char *err = "Error: invalid job or state\n";
+        return write(STDOUT_FILENO, err, strlen(err));
+    }
     // 写"Job ["
     memcpy(buf + pos, "Job [", 5);
     pos += 5;
@@ -484,6 +509,16 @@ int itoa_safe(int num, char *buf) {
     }
     buf[len] = '\0';
     return len;
+}
+
+ssize_t sio_puts(char *s) {
+    return write(STDOUT_FILENO, s, strlen(s));
+}
+
+ssize_t sio_putl(int num) {
+    char s[32];
+    itoa_safe(num, s);
+    return sio_puts(s);
 }
 
 /*********************

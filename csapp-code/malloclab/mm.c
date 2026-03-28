@@ -42,6 +42,8 @@ team_t team = {
 
 #define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
 
+// #define WSIZE           sizeof(void*)
+// #define DSIZE           (2 * WSIZE)
 #define WSIZE 4
 #define DSIZE 8
 #define CHUNKSIZE (1 << 12)
@@ -58,6 +60,15 @@ team_t team = {
 #define FTRP(bp) ((char *)(bp) + GET_SIZE(HDRP(bp)) - DSIZE)
 #define NEXT_BP(bp) ((char *)(bp) + GET_SIZE(HDRP(bp)))
 #define PREV_BP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp) - DSIZE)))
+
+// 空闲块相关指针操作
+#define FREE_PREV(bp) ((char **)(bp))
+#define FREE_NEXT(bp) ((char **)((char *)(bp) + WSIZE))
+
+#define SET_PREV_FREE_BP(bp, prev) (*FREE_PREV(bp) = prev)
+#define GET_PREV_FREE_BP(bp) (*FREE_PREV(bp))
+#define SET_NEXT_FREE_BP(bp, next) (*FREE_NEXT(bp) = next)
+#define GET_NEXT_FREE_BP(bp) (*FREE_NEXT(bp))
 
 // ======================== MIT 6.5840 风格调试打印 ========================
 #define DEBUG 0
@@ -87,6 +98,7 @@ team_t team = {
 // =========================================================================
 
 static char *heap_listp;
+static char **free_block_listp;
 
 static void *coalesce(void *bp);
 static void *alloc_strategy(size_t asize);
@@ -121,7 +133,7 @@ static void mm_check() {
     size_t heap_size_cnt = DSIZE;
 
     // 在循环开始前检查
-    if (GET_SIZE(HDRP(heap_listp)) != DSIZE || !GET_ALLOC(HDRP(heap_listp)))
+    if (GET_SIZE(HDRP(heap_listp)) != 2 * DSIZE || !GET_ALLOC(HDRP(heap_listp)))
         DWarn("mm_check 序言块被破坏 malloc:%d free:%d\n", malloc_times, free_times);
 
     while (GET_SIZE(HDRP(bp)) > 0) {
@@ -143,6 +155,19 @@ static void mm_check() {
             DWarn("mm_check 块头尾大小不一致 sequences:%d malloc:%d free:%d\n", sequences,
                   malloc_times, free_times);
         }
+
+        // ============= printf 块信息 ============
+        if (GET_SIZE(HDRP(bp)) != 0) {
+            printf("bp=%-12p state=%d | size=%-4lu | ", bp, GET_ALLOC(HDRP(bp)),
+                   GET_SIZE(HDRP(bp)));
+            if (!GET_ALLOC(HDRP(bp)))
+                printf("prev=%-12p | next=%-12p", GET_PREV_FREE_BP(bp), GET_NEXT_FREE_BP(bp));
+            printf("\n");
+        } else {
+            printf("heap tail | bp=%p | hdr=0x%lx\n", bp, HDRP(bp));
+        }
+        // =======================================
+
         sequences++;
         heap_size_cnt += GET_SIZE(HDRP(bp));
         bp = next_bp;
@@ -158,17 +183,37 @@ static void mm_check() {
 int mm_init(void) {
     // 对堆初始化
     mem_init();
-    if ((heap_listp = mem_sbrk(4 * WSIZE)) == (void *)-1)
+    if ((heap_listp = mem_sbrk(6 * WSIZE)) == (void *)-1)
         return -1;
 
     // 初始化序言块、填充块
     PUT(heap_listp, 0);
-    PUT(heap_listp + WSIZE, PACK(DSIZE, 1));
-    PUT(heap_listp + (2 * WSIZE), PACK(DSIZE, 1));
-    PUT(heap_listp + (3 * WSIZE), PACK(0, 1));
+    PUT(heap_listp + WSIZE, PACK(2 * DSIZE, 1));
+    PUT(heap_listp + (2 * WSIZE), 0);
+    PUT(heap_listp + (3 * WSIZE), 0);
+    PUT(heap_listp + (4 * WSIZE), PACK(2 * DSIZE, 1));
+    PUT(heap_listp + (5 * WSIZE), PACK(0, 1));
     heap_listp += 2 * WSIZE;
-    if (DEBUG)
+    free_block_listp = (char **)heap_listp;
+    if (DEBUG) {
         printf("init \n");
+        char *p = mem_heap_lo();
+        printf("=== 初始化堆全字段打印 ===\n");
+        printf("addr:%p | val:0x%08x | 对齐填充块\n", p, GET(p));
+        p += WSIZE;
+        printf("addr:%p | val:0x%08x | 序言块头部\n", p, GET(p));
+        p += WSIZE;
+        printf("addr:%p | val:%p | 序言块 prev\n", p, (void *)*(char **)p);
+        p += WSIZE;
+        printf("addr:%p | val:%p | 序言块 next\n", p, (void *)*(char **)p);
+        p += WSIZE;
+        printf("addr:%p | val:0x%08x | 序言块尾部\n", p, GET(p));
+        p += WSIZE;
+        printf("addr:%p | val:0x%08x | 结尾块头部\n", p, GET(p));
+        printf("===========================\n");
+        // exit(0);
+    }
+
     return 0;
 }
 
@@ -177,13 +222,14 @@ int mm_init(void) {
  *     Always allocate a block whose size is a multiple of the alignment.
  */
 void *mm_malloc(size_t size) {
-    DMalloc("start malloc:%d free:%d \n", malloc_times, free_times);
+    DMalloc("start malloc:%d free:%d ", malloc_times, free_times);
 
     malloc_times++;
 
     if (size <= 0)
         return NULL;
 
+    // 假如是64位的系统里，这个asize需要重新定义，因为最小合法块是32字节的
     size_t asize = ALIGN(size + DSIZE);
     char *bp;
     if ((bp = find(asize)) != NULL) {
@@ -197,13 +243,16 @@ void *mm_malloc(size_t size) {
     if ((bp = alloc_strategy(asize)) == NULL)
         return NULL;
     place(bp, asize);
+
+    if (DEBUG)
+        mm_check();
     // exit(0)
     return bp;
 }
 
 /**
  * 空闲块不足的时候，启动分配策略
- * 可以直接扩展堆，也可以整理堆
+ * 可以直接扩展堆，也可以整理堆(malloc lab里不允许这么操作)
  */
 static void *alloc_strategy(size_t asize) {
     char *bp;
@@ -216,7 +265,7 @@ static void *alloc_strategy(size_t asize) {
 }
 
 static void *extend_heap(size_t words) {
-    DExtend(" \n");
+    DExtend(" ");
     size_t size = words % 2 ? (words + 1) * WSIZE : words * WSIZE;
     char *bp;
     if ((bp = mem_sbrk((int)size)) == (void *)-1)
@@ -225,6 +274,8 @@ static void *extend_heap(size_t words) {
     PUT(HDRP(bp), PACK(size, 0));
     PUT(FTRP(bp), PACK(size, 0));
     PUT(HDRP(NEXT_BP(bp)), PACK(0, 1));
+    SET_NEXT_FREE_BP(bp, NULL);
+    SET_PREV_FREE_BP(bp, NULL);
 
     return coalesce(bp);
 }
@@ -234,12 +285,11 @@ static void *extend_heap(size_t words) {
  * 如果没有return NULL
  */
 static void *find(size_t asize) {
-    char *cur_bp = heap_listp;
-    while (GET_SIZE(HDRP(cur_bp)) != 0) {
+    char *cur_bp = GET_NEXT_FREE_BP(free_block_listp);
+    while (cur_bp != NULL) {
         if (!GET_ALLOC(HDRP(cur_bp)) && GET_SIZE(HDRP(cur_bp)) >= asize)
             return cur_bp;
-
-        cur_bp = NEXT_BP(cur_bp);
+        cur_bp = GET_NEXT_FREE_BP(cur_bp);
     }
 
     return NULL;
@@ -254,15 +304,32 @@ static void place(void *bp, size_t asize) {
     // 要求2个DSIZE是因为只放头尾的块是没有意义的，而且用不了导致无意义碎片
     // 2*DSIZE是最小合法有效块
     if (cur_size - asize >= 2 * DSIZE) {
+        char *prev_free_bp = GET_PREV_FREE_BP(bp);
+        char *next_free_bp = GET_NEXT_FREE_BP(bp);
         PUT(HDRP(bp), PACK(asize, 1));
         PUT(FTRP(bp), PACK(asize, 1));
 
         char *next = NEXT_BP(bp);
         PUT(HDRP(next), PACK(cur_size - asize, 0));
         PUT(FTRP(next), PACK(cur_size - asize, 0));
+
+        SET_PREV_FREE_BP(next, prev_free_bp);
+        SET_NEXT_FREE_BP(next, next_free_bp);
+        SET_NEXT_FREE_BP(prev_free_bp, next);
+        if (next_free_bp != NULL)
+            SET_PREV_FREE_BP(next_free_bp, next);
+
     } else {
+        char *prev_free_bp = GET_PREV_FREE_BP(bp);
+        char *next_free_bp = GET_NEXT_FREE_BP(bp);
+
         PUT(HDRP(bp), PACK(cur_size, 1));
         PUT(FTRP(bp), PACK(cur_size, 1));
+
+        // 链表断开
+        SET_NEXT_FREE_BP(prev_free_bp, next_free_bp);
+        if (next_free_bp != NULL)
+            SET_PREV_FREE_BP(next_free_bp, prev_free_bp);
     }
 }
 
@@ -271,7 +338,7 @@ static void place(void *bp, size_t asize) {
  * return empty_head
  */
 static void *coalesce(void *bp) {
-    DCoalesce(" \n");
+    DCoalesce(" ");
     // 合并逻辑不需要采用递归，因为只有四种可能的情况
     size_t is_prev_alloc = GET_ALLOC(HDRP(PREV_BP(bp)));
     size_t is_next_alloc = GET_ALLOC(HDRP(NEXT_BP(bp)));
@@ -279,22 +346,63 @@ static void *coalesce(void *bp) {
 
     if (!is_prev_alloc && !is_next_alloc) {
         // 先合并前面的块，再合并后面的块
-        size_t size = GET_SIZE(HDRP(PREV_BP(bp))) + GET_SIZE(HDRP(NEXT_BP(bp))) + cur_size;
-        PUT(HDRP(PREV_BP(bp)), PACK(size, 0));
-        PUT(FTRP(NEXT_BP(bp)), PACK(size, 0));
+        cur_size += GET_SIZE(HDRP(PREV_BP(bp))) + GET_SIZE(HDRP(NEXT_BP(bp)));
+        // 抽取合并后上下两个空闲块的地址，合并后需要修改他们对应的指针
+        char *prev_free_bp = GET_PREV_FREE_BP(PREV_BP(bp));
+        char *next_free_bp = GET_NEXT_FREE_BP(NEXT_BP(bp));
 
-        bp = PREV_BP(bp);
+        char *merge_bp = PREV_BP(bp);
+        PUT(HDRP(merge_bp), PACK(cur_size, 0));
+        PUT(FTRP(merge_bp), PACK(cur_size, 0));
+
+        // 调整链表
+        SET_NEXT_FREE_BP(merge_bp, next_free_bp);
+        SET_PREV_FREE_BP(merge_bp, prev_free_bp);
+        SET_NEXT_FREE_BP(prev_free_bp, merge_bp);
+        if (next_free_bp != NULL)
+            SET_PREV_FREE_BP(next_free_bp, merge_bp);
+
+        bp = merge_bp;
     } else if (!is_prev_alloc && is_next_alloc) {
-        size_t size = GET_SIZE(HDRP(PREV_BP(bp))) + cur_size;
-        PUT(HDRP(PREV_BP(bp)), PACK(size, 0));
-        PUT(FTRP(bp), PACK(size, 0));
+        // 前一个块空闲，直接合并并且继承其在free_block_listp中的位置即可
+        char *prev_bp = PREV_BP(bp);
+        cur_size += GET_SIZE(HDRP(prev_bp));
+        PUT(HDRP(prev_bp), PACK(cur_size, 0));
+        PUT(FTRP(prev_bp), PACK(cur_size, 0));
 
-        bp = PREV_BP(bp);
+        bp = prev_bp;
     } else if (is_prev_alloc && !is_next_alloc) {
-        size_t size = GET_SIZE(HDRP(NEXT_BP(bp))) + cur_size;
-        PUT(HDRP(bp), PACK(size, 0));
-        // head设置后，可以直接访问到下一个块，而不需要用next
-        PUT(FTRP(bp), PACK(size, 0));
+        // 合并后，将后一个空闲块的在free_block_listp中的位置继承过来
+        char *next_bp = NEXT_BP(bp);
+        cur_size += GET_SIZE(HDRP(next_bp));
+        char *prev_free_bp = GET_PREV_FREE_BP(next_bp);
+        char *next_free_bp = GET_NEXT_FREE_BP(next_bp);
+
+        PUT(HDRP(bp), PACK(cur_size, 0));
+        PUT(FTRP(bp), PACK(cur_size, 0));
+        SET_PREV_FREE_BP(bp, prev_free_bp);
+        SET_NEXT_FREE_BP(bp, next_free_bp);
+
+        // 更新前后空闲块对于新合并空闲块的定位
+        SET_NEXT_FREE_BP(prev_free_bp, bp);
+        if (next_free_bp != NULL)
+            SET_PREV_FREE_BP(next_free_bp, bp);
+    } else {
+        // 在空闲块中搜索自己适当的位置插入
+        char *cur_free_bp = (char *)free_block_listp;
+        char *next_free_bp = GET_NEXT_FREE_BP(cur_free_bp);
+        while (cur_free_bp != NULL) {
+            next_free_bp = GET_NEXT_FREE_BP(cur_free_bp);
+            if (next_free_bp == NULL || bp < next_free_bp)
+                break;
+            cur_free_bp = next_free_bp;
+        }
+
+        SET_PREV_FREE_BP(bp, cur_free_bp);
+        SET_NEXT_FREE_BP(bp, next_free_bp);
+        SET_NEXT_FREE_BP(cur_free_bp, bp);
+        if (next_free_bp != NULL)
+            SET_PREV_FREE_BP(next_free_bp, bp);
     }
 
     return bp;
@@ -304,7 +412,7 @@ static void *coalesce(void *bp) {
  * mm_free - Freeing a block does nothing.
  */
 void mm_free(void *ptr) {
-    DFree("start malloc:%d free:%d \n", malloc_times, free_times);
+    DFree("start malloc:%d free:%d ", malloc_times, free_times);
     free_times++;
 
     // 释放块
@@ -315,9 +423,8 @@ void mm_free(void *ptr) {
     // 合并空闲块
     ptr = coalesce(ptr);
 
-    if (DEBUG && free_times == 23)
+    if (DEBUG)
         mm_check();
-    // mm_check(ptr);
 }
 
 /*

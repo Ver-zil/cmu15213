@@ -107,6 +107,8 @@ static void place(void *bp, size_t asize);
 static void *extend_heap(size_t words);
 static void mm_check();
 static void mm_check_unconsistency(void *bp);
+static void pop_free_bp(void *bp);
+static void insert_free_bp(void *bp);
 
 /**
  * check连续性
@@ -287,7 +289,7 @@ static void *extend_heap(size_t words) {
 static void *find(size_t asize) {
     char *cur_bp = GET_NEXT_FREE_BP(free_block_listp);
     while (cur_bp != NULL) {
-        if (!GET_ALLOC(HDRP(cur_bp)) && GET_SIZE(HDRP(cur_bp)) >= asize)
+        if (GET_SIZE(HDRP(cur_bp)) >= asize)
             return cur_bp;
         cur_bp = GET_NEXT_FREE_BP(cur_bp);
     }
@@ -304,8 +306,7 @@ static void place(void *bp, size_t asize) {
     // 要求2个DSIZE是因为只放头尾的块是没有意义的，而且用不了导致无意义碎片
     // 2*DSIZE是最小合法有效块
     if (cur_size - asize >= 2 * DSIZE) {
-        char *prev_free_bp = GET_PREV_FREE_BP(bp);
-        char *next_free_bp = GET_NEXT_FREE_BP(bp);
+        pop_free_bp(bp);
         PUT(HDRP(bp), PACK(asize, 1));
         PUT(FTRP(bp), PACK(asize, 1));
 
@@ -313,24 +314,39 @@ static void place(void *bp, size_t asize) {
         PUT(HDRP(next), PACK(cur_size - asize, 0));
         PUT(FTRP(next), PACK(cur_size - asize, 0));
 
-        SET_PREV_FREE_BP(next, prev_free_bp);
-        SET_NEXT_FREE_BP(next, next_free_bp);
-        SET_NEXT_FREE_BP(prev_free_bp, next);
-        if (next_free_bp != NULL)
-            SET_PREV_FREE_BP(next_free_bp, next);
-
+        insert_free_bp(next);
     } else {
-        char *prev_free_bp = GET_PREV_FREE_BP(bp);
-        char *next_free_bp = GET_NEXT_FREE_BP(bp);
+        pop_free_bp(bp);
 
         PUT(HDRP(bp), PACK(cur_size, 1));
         PUT(FTRP(bp), PACK(cur_size, 1));
-
-        // 链表断开
-        SET_NEXT_FREE_BP(prev_free_bp, next_free_bp);
-        if (next_free_bp != NULL)
-            SET_PREV_FREE_BP(next_free_bp, prev_free_bp);
     }
+}
+
+/**
+ * 将空闲块从链表中弹出
+ */
+static void pop_free_bp(void *bp) {
+    char *prev_free_bp = GET_PREV_FREE_BP(bp);
+    char *next_free_bp = GET_NEXT_FREE_BP(bp);
+
+    SET_NEXT_FREE_BP(prev_free_bp, next_free_bp);
+    if (next_free_bp != NULL)
+        SET_PREV_FREE_BP(next_free_bp, prev_free_bp);
+}
+
+/**
+ * 将空闲块插入链表（插入策略——头插法）
+ */
+static void insert_free_bp(void *bp) {
+    char *dummy_head = (char *)free_block_listp;
+    char *head = GET_NEXT_FREE_BP(dummy_head);
+
+    SET_PREV_FREE_BP(bp, dummy_head);
+    SET_NEXT_FREE_BP(bp, head);
+    SET_NEXT_FREE_BP(dummy_head, bp);
+    if (head != NULL)
+        SET_PREV_FREE_BP(head, bp);
 }
 
 /**
@@ -345,64 +361,44 @@ static void *coalesce(void *bp) {
     size_t cur_size = GET_SIZE(HDRP(bp));
 
     if (!is_prev_alloc && !is_next_alloc) {
-        // 先合并前面的块，再合并后面的块
         cur_size += GET_SIZE(HDRP(PREV_BP(bp))) + GET_SIZE(HDRP(NEXT_BP(bp)));
-        // 抽取合并后上下两个空闲块的地址，合并后需要修改他们对应的指针
-        char *prev_free_bp = GET_PREV_FREE_BP(PREV_BP(bp));
-        char *next_free_bp = GET_NEXT_FREE_BP(NEXT_BP(bp));
 
-        char *merge_bp = PREV_BP(bp);
-        PUT(HDRP(merge_bp), PACK(cur_size, 0));
-        PUT(FTRP(merge_bp), PACK(cur_size, 0));
-
-        // 调整链表
-        SET_NEXT_FREE_BP(merge_bp, next_free_bp);
-        SET_PREV_FREE_BP(merge_bp, prev_free_bp);
-        SET_NEXT_FREE_BP(prev_free_bp, merge_bp);
-        if (next_free_bp != NULL)
-            SET_PREV_FREE_BP(next_free_bp, merge_bp);
-
-        bp = merge_bp;
-    } else if (!is_prev_alloc && is_next_alloc) {
-        // 前一个块空闲，直接合并并且继承其在free_block_listp中的位置即可
         char *prev_bp = PREV_BP(bp);
-        cur_size += GET_SIZE(HDRP(prev_bp));
+        char *next_bp = NEXT_BP(bp);
+        pop_free_bp(prev_bp);
+        pop_free_bp(next_bp);
+
+        // 合并
         PUT(HDRP(prev_bp), PACK(cur_size, 0));
         PUT(FTRP(prev_bp), PACK(cur_size, 0));
 
+        insert_free_bp(prev_bp);
+
+        bp = prev_bp;
+    } else if (!is_prev_alloc && is_next_alloc) {
+        char *prev_bp = PREV_BP(bp);
+        pop_free_bp(prev_bp);
+        cur_size += GET_SIZE(HDRP(prev_bp));
+
+        // 合并
+        PUT(HDRP(prev_bp), PACK(cur_size, 0));
+        PUT(FTRP(prev_bp), PACK(cur_size, 0));
+
+        insert_free_bp(prev_bp);
+
         bp = prev_bp;
     } else if (is_prev_alloc && !is_next_alloc) {
-        // 合并后，将后一个空闲块的在free_block_listp中的位置继承过来
         char *next_bp = NEXT_BP(bp);
         cur_size += GET_SIZE(HDRP(next_bp));
-        char *prev_free_bp = GET_PREV_FREE_BP(next_bp);
-        char *next_free_bp = GET_NEXT_FREE_BP(next_bp);
+        pop_free_bp(next_bp);
 
+        // 合并
         PUT(HDRP(bp), PACK(cur_size, 0));
         PUT(FTRP(bp), PACK(cur_size, 0));
-        SET_PREV_FREE_BP(bp, prev_free_bp);
-        SET_NEXT_FREE_BP(bp, next_free_bp);
 
-        // 更新前后空闲块对于新合并空闲块的定位
-        SET_NEXT_FREE_BP(prev_free_bp, bp);
-        if (next_free_bp != NULL)
-            SET_PREV_FREE_BP(next_free_bp, bp);
+        insert_free_bp(bp);
     } else {
-        // 在空闲块中搜索自己适当的位置插入
-        char *cur_free_bp = (char *)free_block_listp;
-        char *next_free_bp = GET_NEXT_FREE_BP(cur_free_bp);
-        while (cur_free_bp != NULL) {
-            next_free_bp = GET_NEXT_FREE_BP(cur_free_bp);
-            if (next_free_bp == NULL || bp < next_free_bp)
-                break;
-            cur_free_bp = next_free_bp;
-        }
-
-        SET_PREV_FREE_BP(bp, cur_free_bp);
-        SET_NEXT_FREE_BP(bp, next_free_bp);
-        SET_NEXT_FREE_BP(cur_free_bp, bp);
-        if (next_free_bp != NULL)
-            SET_PREV_FREE_BP(next_free_bp, bp);
+        insert_free_bp(bp);
     }
 
     return bp;

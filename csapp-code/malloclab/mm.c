@@ -127,14 +127,16 @@ static int malloc_times = 0;
 static int free_times = 0;
 static int realloc_times = 0;
 static int pre_realloc_times = 0;
-static int dynamic_block_size = BIG_BLOCK;
+static double dynamic_block_size = BIG_BLOCK;
 
 static void dynamic_block_size_update(size_t rasize) {
-    if (pre_realloc_times == realloc_times)
-        return;
-
-    dynamic_block_size += (rasize - dynamic_block_size) / realloc_times * 0.25;
-    pre_realloc_times = realloc_times;
+    // if (pre_realloc_times == realloc_times)
+    //     return;
+    double delta = (double)rasize - (double)dynamic_block_size;
+    double total_ops = (double)(realloc_times + malloc_times);
+    dynamic_block_size += (delta / total_ops) * 0.5;
+    // pre_realloc_times = realloc_times;
+    // printf("dynamic block size:%f \n", dynamic_block_size);
 }
 
 static void mm_check_unconsistency(void *bp) {
@@ -227,6 +229,14 @@ int mm_init(void) {
     PUT(heap_listp + ((2 * (CLASS_NUM + 1) + 1) * WSIZE), PACK(0, 1));
     heap_listp += 2 * WSIZE;
     free_block_array_head_listp = (char **)heap_listp;
+
+    // reset （动态拆分大小块行不通的核心原因就在这里，每次都会继承上次跑的结果）
+    malloc_times = 0;
+    free_times = 0;
+    realloc_times = 0;
+    pre_realloc_times = 0;
+    dynamic_block_size = BIG_BLOCK;
+
     if (DEBUG) {
         printf("init \n");
         char *p = mem_heap_lo();
@@ -265,6 +275,7 @@ void *mm_malloc(size_t size) {
 
     // 假如是64位的系统里，这个asize需要重新定义，因为最小合法块是32字节的
     size_t asize = ALIGN(size + DSIZE);
+    dynamic_block_size_update(asize);
     char *bp;
     if ((bp = find(asize)) != NULL) {
         // printf("malloc find place \n");

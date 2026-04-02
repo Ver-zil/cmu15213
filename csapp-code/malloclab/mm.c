@@ -126,6 +126,16 @@ static void *get_match_class_dummy_head(size_t asize); // 和CLASS_NUM同步更�
 static int malloc_times = 0;
 static int free_times = 0;
 static int realloc_times = 0;
+static int pre_realloc_times = 0;
+static int dynamic_block_size = BIG_BLOCK;
+
+static void dynamic_block_size_update(size_t rasize) {
+    if (pre_realloc_times == realloc_times)
+        return;
+
+    dynamic_block_size += (rasize - dynamic_block_size) / realloc_times * 0.25;
+    pre_realloc_times = realloc_times;
+}
 
 static void mm_check_unconsistency(void *bp) {
     if (!GET_ALLOC(HDRP(bp)) && (!GET_ALLOC(HDRP(PREV_BP(bp))) || !GET_ALLOC(HDRP(NEXT_BP(bp))))) {
@@ -330,7 +340,7 @@ static void *find(size_t asize) {
  */
 static void *place(void *bp, size_t asize) {
     pop_free_bp(bp);
-    if (asize >= BIG_BLOCK)
+    if (asize >= dynamic_block_size)
         return place_block_seg(bp, asize);
     else
         return place_block_seg_little(bp, asize);
@@ -441,10 +451,10 @@ static void insert_free_bp(void *bp) {
     char *pre = dummy_head;
     char *cur = GET_NEXT_FREE_BP(dummy_head);
 
-    while (cur != NULL && GET_SIZE(HDRP(cur)) > GET_SIZE(HDRP(bp))) {
-        pre = cur;
-        cur = GET_NEXT_FREE_BP(cur);
-    }
+    // while (cur != NULL && GET_SIZE(HDRP(cur)) > GET_SIZE(HDRP(bp))) {
+    //     pre = cur;
+    //     cur = GET_NEXT_FREE_BP(cur);
+    // }
 
     SET_PREV_FREE_BP(bp, pre);
     SET_NEXT_FREE_BP(bp, cur);
@@ -538,29 +548,27 @@ void *mm_realloc(void *ptr, size_t size) {
     void *oldptr = ptr;
     void *newptr = ptr;
     size_t copySize = MIN(GET_SIZE(HDRP(oldptr)), size);
-    size_t cur_size = GET_SIZE(HDRP(oldptr));
+    size_t round_size = GET_SIZE(HDRP(oldptr));
     size_t asize = ALIGN((size + DSIZE));
     char *next_bp = NEXT_BP(ptr);
+    dynamic_block_size_update(asize);
 
-    if (cur_size >= asize) {
-        place_block_seg(newptr, asize);
-    } else if (!GET_ALLOC(HDRP(next_bp)) && cur_size + GET_SIZE(HDRP(next_bp)) >= asize) {
-        // 将下一个块合到当前块上
-        pop_free_bp(next_bp);
-        cur_size += GET_SIZE(HDRP(next_bp));
-        PUT(HDRP(newptr), PACK(cur_size, 0));
-        PUT(HDRP(newptr), PACK(cur_size, 0));
-        place_block_seg(newptr, asize);
-    } else if (GET_SIZE(HDRP(next_bp)) == 0 ||
-               (!GET_ALLOC(HDRP(next_bp)) && GET_SIZE(HDRP(NEXT_BP(next_bp))) == 0)) {
-        // 直接扩堆
-        if ((next_bp = alloc_strategy(asize)) == NULL)
-            return NULL;
+    if (!GET_ALLOC(HDRP(PREV_BP(oldptr)))) {
+        pop_free_bp(PREV_BP(oldptr));
+        round_size += GET_SIZE(HDRP(PREV_BP(oldptr)));
+        newptr = PREV_BP(oldptr);
+    }
 
-        pop_free_bp(next_bp);
-        cur_size += GET_SIZE(HDRP(next_bp));
-        PUT(HDRP(newptr), PACK(cur_size, 0));
-        PUT(FTRP(newptr), PACK(cur_size, 0));
+    if (!GET_ALLOC(HDRP(NEXT_BP(oldptr)))) {
+        pop_free_bp(NEXT_BP(oldptr));
+        round_size += GET_SIZE(HDRP(NEXT_BP(oldptr)));
+    }
+
+    if (round_size >= asize) {
+        // 先移动再设置头尾，不然会内容有概率出错
+        memmove(newptr, oldptr, copySize);
+        PUT(HDRP(newptr), PACK(round_size, 0));
+        PUT(FTRP(newptr), PACK(round_size, 0));
         place_block_seg(newptr, asize);
     } else {
         // 重新malloc和free

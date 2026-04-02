@@ -434,17 +434,23 @@ static void *get_match_class_dummy_head(size_t asize) {
 }
 
 /**
- * 将空闲块插入链表（插入策略——头插法）
+ * 将空闲块插入链表（插入策略——块大小排序法）
  */
 static void insert_free_bp(void *bp) {
     char *dummy_head = get_match_class_dummy_head(GET_SIZE(HDRP(bp)));
-    char *head = GET_NEXT_FREE_BP(dummy_head);
+    char *pre = dummy_head;
+    char *cur = GET_NEXT_FREE_BP(dummy_head);
 
-    SET_PREV_FREE_BP(bp, dummy_head);
-    SET_NEXT_FREE_BP(bp, head);
-    SET_NEXT_FREE_BP(dummy_head, bp);
-    if (head != NULL)
-        SET_PREV_FREE_BP(head, bp);
+    while (cur != NULL && GET_SIZE(HDRP(cur)) > GET_SIZE(HDRP(bp))) {
+        pre = cur;
+        cur = GET_NEXT_FREE_BP(cur);
+    }
+
+    SET_PREV_FREE_BP(bp, pre);
+    SET_NEXT_FREE_BP(bp, cur);
+    SET_NEXT_FREE_BP(pre, bp);
+    if (cur != NULL)
+        SET_PREV_FREE_BP(cur, bp);
 }
 
 /**

@@ -6,7 +6,7 @@
 #define MAX_OBJECT_SIZE 102400
 
 // ======================== MIT 6.5840 风格调试打印 ========================
-#define DEBUG 0
+#define DEBUG 1
 #if DEBUG
 #define DPrintf(format, ...)                                                                       \
     printf("[DEBUG] | %s():%d | " format "\n", __func__, __LINE__, ##__VA_ARGS__)
@@ -22,6 +22,8 @@ void build__request(rio_t *client_rio, int serverfd, char *uri, char *host);
 void read_client_requesthdrs(rio_t *client_rio);
 void build_response(int serverfd, int clientfd);
 
+void *thread(void *vargp);
+
 /* You won't lose style points for including this long line in your code */
 static const char *user_agent_hdr =
     "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:10.0.3) Gecko/20120305 Firefox/10.0.3\r\n";
@@ -34,22 +36,35 @@ int main(int argc, char **argv) {
 
     struct sockaddr_storage client_addr;
     socklen_t client_len;
-    char hostname[MAXLINE], port[MAXLINE];
+    pthread_t tid;
 
     // 暴露client连接端口
     int listenfd = Open_listenfd(argv[1]);
-    int connectfd;
+    int *connectfdp;
     while (1) {
         client_len = sizeof(client_addr);
-        connectfd = Accept(listenfd, (SA *)&client_addr, &client_len);
-        Getnameinfo((SA *)&client_addr, client_len, hostname, MAXLINE, port, MAXLINE, 0);
-        printf("proxy main Accepted from (%s, %s) \n", hostname, port);
-        doit(connectfd);
-        Close(connectfd);
+        connectfdp = Malloc(sizeof(int));
+        *connectfdp = Accept(listenfd, (SA *)&client_addr, &client_len);
+        if (pthread_create(&tid, NULL, thread, connectfdp)) {
+            client_error(*connectfdp, "pthread_create error", "500", "Internal Server Error",
+                         "Proxy couldn't create a thread to handle the request");
+            Close(*connectfdp);
+            Free(connectfdp);
+        }
     }
 
     printf("%s", user_agent_hdr);
     return 0;
+}
+
+void *thread(void *vargp) {
+    // 线程分离，线程结束后自动回收资源，不需要主线程调用pthread_join来回收资源
+    pthread_detach(pthread_self());
+    int clientfd = *((int *)vargp);
+    Free(vargp);
+    doit(clientfd);
+    Close(clientfd);
+    return NULL;
 }
 
 // 读取client的连接请求，连接到server端

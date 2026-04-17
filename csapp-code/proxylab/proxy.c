@@ -15,6 +15,53 @@
 #endif
 // =======================================================================
 
+// ======================== 预线程定义 ========================
+#define NTHREADS 4
+#define SBUFSIZE 16
+
+typedef struct {
+    int *buf;    // arrat
+    int n;       // buf最大容量
+    int front;   // buf[(front+1)%n] 就是第一个元素
+    int rear;    // buf[rear%n]就是最后一个元素
+    sem_t mutex; // 共用
+    sem_t slots; // 生产者用
+    sem_t items; // 消费者用
+} sbuf_t;
+
+void sbuf_init(sbuf_t *sp, int n) {
+    sp->buf = Malloc(n * sizeof(int));
+    sp->n = n;
+    sp->front = sp->rear = 0;
+    Sem_init(&sp->mutex, 0, 1);
+    Sem_init(&sp->slots, 0, n);
+    Sem_init(&sp->items, 0, 0);
+}
+
+void sbuf_deinit(sbuf_t *sp) {
+    Free(sp->buf);
+}
+
+void sbuf_insert(sbuf_t *sp, int item) {
+    P(&sp->slots);
+    P(&sp->mutex);
+    sp->buf[(++sp->rear) % sp->n] = item;
+    V(&sp->mutex);
+    V(&sp->items);
+}
+
+int sbuf_remove(sbuf_t *sp) {
+    P(&sp->items);
+    P(&sp->mutex);
+    int item = sp->buf[(++sp->front) % sp->n];
+    V(&sp->mutex);
+    V(&sp->slots);
+    return item;
+}
+
+sbuf_t sbuf;
+// =======================================================================
+
 void doit(int clientfd);
 void client_error(int fd, char *cause, char *errnum, char *shortmsg, char *longmsg);
 int parse_url(char *url, char *host, char *port, char *uri);
@@ -38,19 +85,21 @@ int main(int argc, char **argv) {
     socklen_t client_len;
     pthread_t tid;
 
+    sbuf_init(&sbuf, SBUFSIZE);
+    for (int i = 0; i < NTHREADS; i++) {
+        if (pthread_create(&tid, NULL, thread, NULL) != 0) {
+            fprintf(stderr, "main: pthread_create error\n");
+            exit(1);
+        }
+    }
+
     // 暴露client连接端口
     int listenfd = Open_listenfd(argv[1]);
-    int *connectfdp;
+    int connectfd;
     while (1) {
         client_len = sizeof(client_addr);
-        connectfdp = Malloc(sizeof(int));
-        *connectfdp = Accept(listenfd, (SA *)&client_addr, &client_len);
-        if (pthread_create(&tid, NULL, thread, connectfdp)) {
-            client_error(*connectfdp, "pthread_create error", "500", "Internal Server Error",
-                         "Proxy couldn't create a thread to handle the request");
-            Close(*connectfdp);
-            Free(connectfdp);
-        }
+        connectfd = Accept(listenfd, (SA *)&client_addr, &client_len);
+        sbuf_insert(&sbuf, connectfd);
     }
 
     printf("%s", user_agent_hdr);
@@ -60,10 +109,11 @@ int main(int argc, char **argv) {
 void *thread(void *vargp) {
     // 线程分离，线程结束后自动回收资源，不需要主线程调用pthread_join来回收资源
     pthread_detach(pthread_self());
-    int clientfd = *((int *)vargp);
-    Free(vargp);
-    doit(clientfd);
-    Close(clientfd);
+    while (1) {
+        int clientfd = sbuf_remove(&sbuf);
+        doit(clientfd);
+        Close(clientfd);
+    }
     return NULL;
 }
 

@@ -1,9 +1,67 @@
 #include "csapp.h"
 #include <stdio.h>
 
+// ======================== cache定义 ====================================
 /* Recommended max cache and object sizes */
 #define MAX_CACHE_SIZE 1049000
 #define MAX_OBJECT_SIZE 102400
+
+typedef struct cache_node {
+    struct cache_node *prev;
+    struct cache_node *next;
+    char *object;
+    ssize_t size;
+    char url[MAXLINE];
+} cache_node;
+
+typedef struct {
+    cache_node *head;
+    cache_node *tail;
+    int total_size;
+    sem_t mutex;
+} cache;
+
+cache_node *cache_node_create(char *url) {
+    cache_node *node = Malloc(sizeof(cache_node));
+    node->prev = NULL;
+    node->next = NULL;
+    node->object = Malloc(MAX_OBJECT_SIZE);
+    node->size = 0;
+    strcpy(node->url, url);
+    return node;
+}
+
+void cache_node_delete(cache_node *node) {
+    Free(node->object);
+    Free(node);
+}
+
+void cache_init(cache **c) {
+    *c = Malloc(sizeof(cache));
+    (*c)->head = Malloc(sizeof(cache_node));
+    (*c)->tail = Malloc(sizeof(cache_node));
+    (*c)->head->url[0] = '\0';
+    (*c)->tail->url[0] = '\0';
+    (*c)->head->prev = NULL;
+    (*c)->head->next = (*c)->tail;
+    (*c)->tail->prev = (*c)->head;
+    (*c)->tail->next = NULL;
+    (*c)->total_size = 0;
+    Sem_init(&(*c)->mutex, 0, 1);
+}
+
+void cache_deinit(cache **c) {
+    cache_node *cur = (*c)->head;
+    while (cur != NULL) {
+        cache_node *next = cur->next;
+        cache_node_delete(cur);
+        cur = next;
+    }
+    Free(*c);
+}
+
+cache *cache_pool;
+// =======================================================================
 
 // ======================== MIT 6.5840 风格调试打印 ========================
 #define DEBUG 1
@@ -67,7 +125,12 @@ void client_error(int fd, char *cause, char *errnum, char *shortmsg, char *longm
 int parse_url(char *url, char *host, char *port, char *uri);
 void build__request(rio_t *client_rio, int serverfd, char *uri, char *host);
 void read_client_requesthdrs(rio_t *client_rio);
-void build_response(int serverfd, int clientfd);
+void build_response(int serverfd, int clientfd, char *url);
+
+void cache_pop_node(cache_node *node);
+void cache_insert_node(cache_node *node);
+void cache_update_node(cache_node *node);
+int cache_hit(char *url, int clientfd);
 
 void *thread(void *vargp);
 
@@ -85,6 +148,7 @@ int main(int argc, char **argv) {
     socklen_t client_len;
     pthread_t tid;
 
+    cache_init(&cache_pool);
     sbuf_init(&sbuf, SBUFSIZE);
     for (int i = 0; i < NTHREADS; i++) {
         if (pthread_create(&tid, NULL, thread, NULL) != 0) {
@@ -104,6 +168,56 @@ int main(int argc, char **argv) {
 
     printf("%s", user_agent_hdr);
     return 0;
+}
+
+void cache_pop_node(cache_node *node) {
+    node->prev->next = node->next;
+    node->next->prev = node->prev;
+    node->prev = NULL;
+    node->next = NULL;
+    cache_pool->total_size -= node->size;
+}
+
+/**
+ * 缓存不够的时候一直删除尾部的node，直到有足够的空间插入新的node
+ * 插入新的node到头部
+ */
+void cache_insert_node(cache_node *node) {
+    while (cache_pool->total_size + node->size > MAX_CACHE_SIZE) {
+        cache_node *last = cache_pool->tail->prev;
+        cache_pop_node(last);
+        cache_node_delete(last);
+    }
+
+    node->prev = cache_pool->head;
+    node->next = cache_pool->head->next;
+    node->prev->next = node;
+    node->next->prev = node;
+    cache_pool->total_size += node->size;
+}
+
+void cache_update_node(cache_node *node) {
+    cache_pop_node(node);
+    cache_insert_node(node);
+}
+
+int cache_hit(char *url, int clientfd) {
+    int hit = 0;
+    P(&cache_pool->mutex);
+
+    cache_node *cur = cache_pool->head->next;
+    while (cur != cache_pool->tail) {
+        if (strcmp(cur->url, url) == 0) {
+            hit = 1;
+            Rio_writen(clientfd, cur->object, cur->size);
+            cache_update_node(cur);
+            break;
+        }
+        cur = cur->next;
+    }
+
+    V(&cache_pool->mutex);
+    return hit;
 }
 
 void *thread(void *vargp) {
@@ -134,9 +248,15 @@ void doit(int clientfd) {
         return;
     }
 
+    if (cache_hit(url, clientfd)) {
+        DPrintf("cache hit \n");
+        return;
+    }
+
     // 开始建立目标server的连接
-    char host[MAXLINE], port[MAXLINE], uri[MAXLINE];
-    if (!parse_url(url, host, port, uri)) {
+    char host[MAXLINE], port[MAXLINE], uri[MAXLINE], url_copy[MAXLINE];
+    strcpy(url_copy, url);
+    if (!parse_url(url_copy, host, port, uri)) {
         client_error(clientfd, method, "400", "Bad Request",
                      "Invalid URL format or non-HTTP protocol");
         return;
@@ -154,19 +274,38 @@ void doit(int clientfd) {
     read_client_requesthdrs(&client_rio);
 
     // 读取server端的响应，并返回给client端
-    build_response(serverfd, clientfd);
+    build_response(serverfd, clientfd, url);
     Close(serverfd);
-    DPrintf("close");
+    DPrintf("close \n");
 }
 
 // 从server端读取响应，并发送给client端
-void build_response(int serverfd, int clientfd) {
+void build_response(int serverfd, int clientfd, char *url) {
     rio_t server_rio;
     char buf[MAXLINE];
     ssize_t n;
+    ssize_t total_size = 0;
+    cache_node *node = cache_node_create(url);
     Rio_readinitb(&server_rio, serverfd);
     while ((n = Rio_readnb(&server_rio, buf, MAXLINE)) > 0) {
         Rio_writen(clientfd, buf, n); // 用实际读取的字节数n，不是strlen
+        total_size += n;
+
+        if (total_size > MAX_OBJECT_SIZE) {
+            continue;
+        }
+
+        memcpy(node->object + total_size - n, buf, n);
+    }
+
+    if (total_size > MAX_OBJECT_SIZE)
+        cache_node_delete(node);
+    else {
+        node->size = total_size;
+        DPrintf("cache insert url:%s size:%zd \n", url, node->size);
+        P(&cache_pool->mutex);
+        cache_insert_node(node);
+        V(&cache_pool->mutex);
     }
 }
 
